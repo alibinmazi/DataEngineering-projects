@@ -1,6 +1,6 @@
 ## Description
 ---
-* This repo contains projects done which applies principles in DE. 
+* This repo contains projects done which applies principles in Data Eng. 
 * Notes taken during can be found in folder `0. Back to Basics`
 
 ## Projects
