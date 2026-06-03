@@ -1,0 +1,103 @@
+# =============================================================================
+# UEH Platform: Dev Environment Configuration
+# =============================================================================
+# Purpose: Centralized configuration for dev environment.
+#          Read by Spark jobs, referenced by deployment scripts.
+#
+# Usage in Spark:
+#   spark.conf.get("ueh.environment") → resolves to values below
+#
+# Usage in Airflow:
+#   Variable.get("ueh_environment") = "dev"
+#   Variable.get("ueh_nifi_base_url") = nifi.base_url below
+# =============================================================================
+
+environment: dev
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HDFS Paths
+# ─────────────────────────────────────────────────────────────────────────────
+hdfs:
+  base_path: /data-lake/dev/bronze
+  warehouse_path: /warehouse/dev
+  dead_letter_base: /data-lake/dev/bronze  # dead_letter is within each adapter folder
+  spark_jobs: /apps/ueh/spark
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Iceberg Databases
+# ─────────────────────────────────────────────────────────────────────────────
+databases:
+  control: ueh_dev_control
+  bronze: ueh_dev_bronze
+  silver: ueh_dev_silver
+  gold: ueh_dev_gold
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NiFi Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+nifi:
+  base_url: http://nifi-dev.internal:8080
+  process_groups:
+    nvd: "<nvd-process-group-id>"
+    epss: "<epss-process-group-id>"
+    cisa_kev: "<cisa-kev-process-group-id>"
+  auth:
+    username: ueh_nifi_svc
+    # Password stored in vault: vault://secrets/ueh/dev/nifi_password
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hive / JDBC
+# ─────────────────────────────────────────────────────────────────────────────
+hive:
+  jdbc_url: jdbc:hive2://hiveserver-dev.internal:10000/default
+  driver: org.apache.hive.jdbc.HiveDriver
+  auth_mechanism: KERBEROS  # or PLAIN for dev
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Spark Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+spark:
+  master: yarn
+  deploy_mode: cluster
+  conf:
+    driver_memory: 4g
+    executor_memory: 8g
+    executor_cores: 4
+    executor_instances: 2
+    dynamic_allocation_enabled: true
+    dynamic_allocation_min: 1
+    dynamic_allocation_max: 5
+    sql_extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+    sql_catalog: org.apache.iceberg.spark.SparkSessionCatalog
+    sql_catalog_type: hive
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Airflow Variables (to be set via CLI or UI)
+# ─────────────────────────────────────────────────────────────────────────────
+airflow:
+  variables:
+    ueh_environment: dev
+    ueh_nifi_base_url: http://nifi-dev.internal:8080
+    ueh_nifi_pg_nvd: "<process-group-id>"
+    ueh_nifi_username: ueh_nifi_svc
+    # ueh_nifi_password: stored as Airflow connection or secret
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Vault / Secrets
+# ─────────────────────────────────────────────────────────────────────────────
+vault:
+  address: http://vault-dev.internal:8200
+  auth_method: approle
+  secret_base_path: secrets/ueh/dev
+  # Secrets stored:
+  #   secrets/ueh/dev/nvd_api_key
+  #   secrets/ueh/dev/nifi_password
+  #   (future: tenable_api_key, sysdig_token, etc.)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Monitoring & Alerting
+# ─────────────────────────────────────────────────────────────────────────────
+monitoring:
+  alert_email: ueh-dev-alerts@company.com
+  sla_breach_channel: "#ueh-dev-alerts"  # Slack/Teams
+  dashboard_url: http://grafana-dev.internal:3000/d/ueh
