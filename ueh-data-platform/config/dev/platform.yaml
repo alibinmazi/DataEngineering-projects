@@ -1,0 +1,37 @@
+# =============================================================================
+# UEH Platform Configuration: DEV Environment
+# =============================================================================
+
+environment: dev
+
+databases:
+  control: t01_ueh_dev_ctl
+  bronze: t01_ueh_dev_brz
+  silver: t01_ueh_dev_slv
+  gold: t01_ueh_dev_gld
+
+hdfs:
+  base_path: /data-lake/dev/bronze
+  warehouse_path: /warehouse/dev
+  spark_jobs: /apps/ueh/spark
+
+nifi:
+  base_url: http://nifi-dev.internal:8080
+
+hive:
+  jdbc_url: jdbc:hive2://hiveserver-dev.internal:10000
+
+spark:
+  master: yarn
+  deploy_mode: cluster
+  conf:
+    driver_memory: 4g
+    executor_memory: 8g
+    executor_instances: 2
+
+vault:
+  address: http://vault-dev.internal:8200
+  secret_base_path: secrets/ueh/dev
+
+monitoring:
+  alert_email: ueh-dev-alerts@company.com

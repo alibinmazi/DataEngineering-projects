@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Spark
+metastore_db/
+derby.log
+spark-warehouse/
+
+# Secrets (NEVER commit)
+*.key
+*.pem
+*.secret
+secrets.yaml
+credentials.json
+
+# Logs
+*.log
+logs/
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Environment-specific overrides (use config/{env}/ instead)
+.env
+.env.local
