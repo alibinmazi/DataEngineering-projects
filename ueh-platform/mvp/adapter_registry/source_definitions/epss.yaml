@@ -1,0 +1,65 @@
+# =============================================================================
+# UEH Source Definition: EPSS (Exploit Prediction Scoring System)
+# =============================================================================
+# Category: vulnerability_intel
+# Silver target: slv_vulnerability_intel (enriches existing CVE records)
+# API: https://api.first.org/data/v1/epss
+# =============================================================================
+
+source_system: EPSS
+display_name: "EPSS - Exploit Prediction Scoring System"
+category: vulnerability_intel
+description: "FIRST.org EPSS provides daily exploit probability scores for CVEs."
+documentation_url: "https://www.first.org/epss/api"
+
+api:
+  base_url: "https://api.first.org/data/v1/epss"
+  method: GET
+  auth_methods_supported:
+    - NONE
+
+pagination:
+  type: offset
+  page_size_param: "limit"
+  page_size_max: 1000
+  offset_param: "offset"
+  total_results_path: "$.total"
+
+incremental:
+  supported: true
+  watermark_type: iso_datetime
+  watermark_params:
+    start: "date"
+  format: "yyyy-MM-dd"
+
+response:
+  array_field: "data"
+  record_id_path: "$.cve"
+  record_id_format: "CVE-YYYY-NNNNN"
+
+# Silver routing
+silver:
+  target_schema: vulnerability_intel
+  write_strategy: MERGE
+  merge_key: cve_id
+  enrichment_mode: true
+  enrichment_fields: [epss_score, epss_percentile]
+
+# Default field mappings
+default_mappings:
+  - source_path: "$.cve"
+    target_field: cve_id
+    target_schema: vulnerability_intel
+    transformation: DIRECT
+
+  - source_path: "$.epss"
+    target_field: epss_score
+    target_schema: vulnerability_intel
+    transformation: CAST
+    config: { cast_to: DOUBLE }
+
+  - source_path: "$.percentile"
+    target_field: epss_percentile
+    target_schema: vulnerability_intel
+    transformation: CAST
+    config: { cast_to: DOUBLE }

@@ -1,0 +1,44 @@
+# =============================================================================
+# UEH Source Definition Template
+# =============================================================================
+# Copy this file and fill in for new source systems.
+# File name should match source_system lowercase: e.g., qualys.yaml
+# =============================================================================
+
+source_system: TEMPLATE
+display_name: "Your Source System Name"
+category: vulnerability_intel  # or: scanner, asset_inventory
+description: "Brief description of what this source provides."
+documentation_url: "https://docs.vendor.com/api"
+
+api:
+  base_url: "https://api.vendor.com/v1"
+  method: GET  # or POST
+  auth_methods_supported:
+    - API_KEY
+    # - OAUTH
+    # - BASIC_AUTH
+
+pagination:
+  type: offset  # or: cursor, page_token, export_job
+  page_size_param: "limit"
+  page_size_max: 1000
+  offset_param: "offset"
+  total_results_path: "$.total"
+
+incremental:
+  supported: true  # or false for FULL only
+  watermark_type: iso_datetime  # or: unix_timestamp, cursor_token, export_uuid
+  watermark_params:
+    start: "since"
+    end: "until"
+
+response:
+  array_field: "results"  # JSONPath to array of records
+  record_id_path: "$.id"  # JSONPath to unique record ID
+
+default_mappings: []
+  # - source_path: "$.id"
+  #   target_field: vulnerability_id
+  #   target_schema: vulnerability
+  #   transformation: DIRECT

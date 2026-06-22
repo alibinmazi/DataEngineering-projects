@@ -1,0 +1,121 @@
+# =============================================================================
+# UEH Source Definition: BMC ADDM (Atrium Discovery and Dependency Mapping)
+# =============================================================================
+# Category: asset_inventory
+# Silver target: slv_assets
+# Type: REST_API or FILE (depending on integration method)
+# =============================================================================
+
+source_system: BMC_ADDM
+display_name: "BMC Atrium Discovery and Dependency Mapping"
+category: asset_inventory
+description: "Enterprise asset discovery tool. Discovers servers, network devices, applications."
+documentation_url: "https://docs.bmc.com/docs/addm"
+
+api:
+  base_url: "https://addm.internal.company.com/api/v1"
+  endpoints:
+    hosts: "/data/hosts"
+    network_devices: "/data/network_devices"
+    software: "/data/software_instances"
+  method: GET
+  auth_methods_supported:
+    - BASIC_AUTH
+    - OAUTH
+
+pagination:
+  type: offset
+  page_size_param: "limit"
+  page_size_max: 500
+  offset_param: "offset"
+  total_results_path: "$.total_count"
+
+incremental:
+  supported: true
+  watermark_type: iso_datetime
+  watermark_params:
+    start: "modified_since"
+
+response:
+  array_field: "results"
+  record_id_path: "$.key"
+  record_id_format: "ADDM internal key"
+
+# Silver routing
+silver:
+  target_schema: asset
+  write_strategy: MERGE
+  merge_key: asset_id
+
+# Default field mappings (for host/compute assets)
+default_mappings:
+  - source_path: "$.key"
+    target_field: source_asset_id
+    target_schema: asset
+    transformation: DIRECT
+
+  - source_path: "$.type"
+    target_field: asset_type
+    target_schema: asset
+    transformation: LOOKUP
+    config:
+      map:
+        "Host": "COMPUTE"
+        "NetworkDevice": "NETWORK"
+        "Printer": "OTHER"
+        "StorageDevice": "STORAGE"
+
+  - source_path: "$.hostname"
+    target_field: hostname
+    target_schema: asset
+    transformation: LOWER
+
+  - source_path: "$.#ip"
+    target_field: ip_address
+    target_schema: asset
+    transformation: DIRECT
+
+  - source_path: "$.fqdn"
+    target_field: fqdn
+    target_schema: asset
+    transformation: LOWER
+
+  - source_path: "$.mac_address"
+    target_field: mac_address
+    target_schema: asset
+    transformation: UPPER
+
+  - source_path: "$.os"
+    target_field: operating_system
+    target_schema: asset
+    transformation: DIRECT
+
+  - source_path: "$.os_class"
+    target_field: os_family
+    target_schema: asset
+    transformation: LOOKUP
+    config:
+      map:
+        "Windows": "WINDOWS"
+        "Linux": "LINUX"
+        "UNIX": "LINUX"
+        "macOS": "MACOS"
+        "VMware": "LINUX"
+        "IOS": "NETWORK_OS"
+        "NX-OS": "NETWORK_OS"
+
+  - source_path: "$.domain"
+    target_field: business_unit
+    target_schema: asset
+    transformation: DIRECT
+
+  - source_path: "$.location"
+    target_field: location
+    target_schema: asset
+    transformation: DIRECT
+
+  - source_path: "$.last_update_success"
+    target_field: last_seen
+    target_schema: asset
+    transformation: CAST
+    config: { cast_to: TIMESTAMP }

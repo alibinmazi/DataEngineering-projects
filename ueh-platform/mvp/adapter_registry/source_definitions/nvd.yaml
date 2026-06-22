@@ -1,0 +1,87 @@
+# =============================================================================
+# UEH Source Definition: NVD (National Vulnerability Database)
+# =============================================================================
+# This file documents the NVD API structure for the platform engine.
+# It is NOT runtime config — runtime config is in adapter_config control table.
+# This is reference documentation + default values for UI pre-population.
+# =============================================================================
+
+source_system: NVD
+display_name: "National Vulnerability Database (NVD)"
+category: vulnerability_intel
+description: "NIST NVD provides CVE vulnerability data with CVSS scores and references."
+documentation_url: "https://nvd.nist.gov/developers/vulnerabilities"
+
+# API Specification
+api:
+  base_url: "https://services.nvd.nist.gov/rest/json/cves/2.0"
+  method: GET
+  auth_methods_supported:
+    - API_KEY
+    - NONE
+  rate_limit:
+    with_key: "50 requests / 30 seconds"
+    without_key: "5 requests / 30 seconds"
+
+# Pagination
+pagination:
+  type: offset
+  page_size_param: "resultsPerPage"
+  page_size_max: 2000
+  offset_param: "startIndex"
+  total_results_path: "$.totalResults"
+
+# Incremental Strategy
+incremental:
+  supported: true
+  watermark_type: iso_datetime
+  watermark_params:
+    start: "lastModStartDate"
+    end: "lastModEndDate"
+  format: "yyyy-MM-dd'T'HH:mm:ss.SSS"
+
+# Response Structure
+response:
+  array_field: "vulnerabilities"
+  record_id_path: "$.cve.id"
+  record_id_format: "CVE-YYYY-NNNNN"
+
+# Default Field Mappings (pre-populated in UI for analyst to confirm/modify)
+default_mappings:
+  - source_path: "$.cve.id"
+    target_field: cve_id
+    target_schema: vulnerability
+    transformation: DIRECT
+
+  - source_path: "$.cve.descriptions[0].value"
+    target_field: description
+    target_schema: vulnerability
+    transformation: DIRECT
+
+  - source_path: "$.cve.metrics.cvssMetricV31[0].cvssData.baseScore"
+    target_field: cvss_base_score
+    target_schema: vulnerability
+    transformation: CAST
+    config: { cast_to: DOUBLE }
+
+  - source_path: "$.cve.metrics.cvssMetricV31[0].cvssData.baseSeverity"
+    target_field: severity
+    target_schema: vulnerability
+    transformation: DIRECT
+
+  - source_path: "$.cve.published"
+    target_field: published_date
+    target_schema: vulnerability
+    transformation: CAST
+    config: { cast_to: TIMESTAMP, format: "yyyy-MM-dd'T'HH:mm:ss.SSS" }
+
+  - source_path: "$.cve.lastModified"
+    target_field: last_modified_date
+    target_schema: vulnerability
+    transformation: CAST
+    config: { cast_to: TIMESTAMP, format: "yyyy-MM-dd'T'HH:mm:ss.SSS" }
+
+  - source_path: "$.cve.sourceIdentifier"
+    target_field: source_identifier
+    target_schema: vulnerability
+    transformation: DIRECT
