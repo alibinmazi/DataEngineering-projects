@@ -1,0 +1,75 @@
+# =============================================================================
+# UEH Source Definition: CISA KEV (Known Exploited Vulnerabilities)
+# =============================================================================
+# Category: vulnerability_intel
+# Silver target: slv_vulnerability_intel (enriches existing CVE records)
+# API: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+# =============================================================================
+
+source_system: CISA_KEV
+display_name: "CISA Known Exploited Vulnerabilities Catalog"
+category: vulnerability_intel
+description: "CISA KEV catalog of actively exploited vulnerabilities with remediation deadlines."
+documentation_url: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog"
+
+api:
+  base_url: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+  method: GET
+  auth_methods_supported:
+    - NONE
+
+pagination:
+  type: none
+  description: "Single JSON file download (no pagination needed)"
+
+incremental:
+  supported: false
+  description: "Full catalog download each time. Diff computed in Silver."
+
+response:
+  array_field: "vulnerabilities"
+  record_id_path: "$.cveID"
+  record_id_format: "CVE-YYYY-NNNNN"
+
+# Silver routing
+silver:
+  target_schema: vulnerability_intel
+  write_strategy: MERGE
+  merge_key: cve_id
+  enrichment_mode: true
+  enrichment_fields: [is_in_kev, kev_date_added, kev_due_date, is_actively_exploited]
+
+# Default field mappings
+default_mappings:
+  - source_path: "$.cveID"
+    target_field: cve_id
+    target_schema: vulnerability_intel
+    transformation: DIRECT
+
+  - source_path: "$.dateAdded"
+    target_field: kev_date_added
+    target_schema: vulnerability_intel
+    transformation: CAST
+    config: { cast_to: DATE, format: "yyyy-MM-dd" }
+
+  - source_path: "$.dueDate"
+    target_field: kev_due_date
+    target_schema: vulnerability_intel
+    transformation: CAST
+    config: { cast_to: DATE, format: "yyyy-MM-dd" }
+
+  - source_path: "$.knownRansomwareCampaignUse"
+    target_field: is_actively_exploited
+    target_schema: vulnerability_intel
+    transformation: EXPRESSION
+    config: { expr: "CASE WHEN value = 'Known' THEN true ELSE false END" }
+
+  - source_path: "$.vulnerabilityName"
+    target_field: vulnerability_name
+    target_schema: vulnerability_intel
+    transformation: DIRECT
+
+  - source_path: "$.shortDescription"
+    target_field: description
+    target_schema: vulnerability_intel
+    transformation: DIRECT
