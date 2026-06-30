@@ -580,3 +580,167 @@ No re-ingestion from source APIs ever needed for modeling changes.
 ---
 
 *End of Modeling Guide*
+
+
+
+---
+
+# 10. OWNERSHIP & DATA ACCESS MODEL (CRITICAL)
+
+This section addresses granular ownership: **only the owner should see their
+asset data, not others**. Ownership must flow from asset → findings → exposure.
+
+## 10.1 Two Levels of Ownership
+
+| Level | Meaning | Field | Example |
+|-------|---------|-------|---------|
+| **Tenant ownership** | Which org/tenant OWNS the data | `org_id` | org001, org002 |
+| **Business ownership** | Who is RESPONSIBLE within a tenant | `owner`, `business_unit` | Finance-Team, John |
+
+```
+org_id              → hard isolation boundary (tenant cannot see another tenant)
+business_unit/owner → soft scoping within a tenant (Finance sees Finance assets)
+```
+
+## 10.2 Ownership Propagation Chain
+
+Ownership originates at the ASSET and propagates to everything attached to it.
+
+```
+slv_asset (owner="Finance-Team", org_id="org001")
+     │  asset_id links downward
+     ▼
+slv_vulnerability_finding (inherits owner + org_id via asset_id)
+     │
+     ▼
+gld_exposure_summary (carries owner + org_id for filtering)
+     │
+     ▼
+PostgreSQL serving (row-level security enforced by owner/org_id)
+```
+
+**Key principle:** A vulnerability finding has NO inherent owner. It inherits
+ownership from the ASSET it was found on. Asset is the ownership anchor.
+
+## 10.3 Ownership Fields in Every Canonical Table
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `org_id` | STRING | Tenant isolation (hard boundary) |
+| `owner` | STRING | Responsible team/individual |
+| `business_unit` | STRING | Organizational grouping |
+| `owner_resolved_from` | STRING | Lineage: ASSET, CMDB, ADDM, MANUAL, DERIVED |
+
+### slv_vulnerability_intel — Special Case (No Owner)
+
+CVE knowledge is GLOBAL reference data — NOT owned. Carries `org_id='global'`,
+no owner. Ownership applies only to findings (asset-attached) and assets.
+
+```
+slv_vulnerability_intel   → org_id='global', no owner (public CVE data)
+slv_vulnerability_finding → org_id + owner (inherited from asset)
+slv_asset                 → org_id + owner (the source of ownership)
+```
+
+## 10.4 Ownership Resolution Logic (Stage 2)
+
+Asset owner resolution priority chain:
+
+```python
+owner = COALESCE(
+    cmdb_owner,           # 1st: CMDB authoritative (most trusted)
+    addm_support_group,   # 2nd: ADDM support group
+    business_service,     # 3rd: derived
+    'UNASSIGNED'          # fallback
+)
+owner_resolved_from = CASE
+    WHEN cmdb_owner IS NOT NULL THEN 'CMDB'
+    WHEN addm_support_group IS NOT NULL THEN 'ADDM'
+    ELSE 'DERIVED' END
+```
+
+Finding inherits ownership by JOIN to asset:
+```python
+finding_df = staged_findings.join(
+    slv_asset.select("asset_id","org_id","owner","business_unit"),
+    on="asset_id", how="left")
+# Unmatched asset → owner='UNASSIGNED' (flag for review)
+```
+
+## 10.5 Where Access Control Is Enforced
+
+| Layer | Ownership Role | Enforcement |
+|-------|---------------|-------------|
+| Iceberg (Bronze/Silver/Gold) | CARRIES org_id + owner | Ranger (coarse, by org_id) |
+| PostgreSQL serving | ENFORCES row-level security | RLS policies per user |
+| Web UI / API | APPLIES user context | Query scoped to logged-in user |
+
+### PostgreSQL Row-Level Security
+
+```sql
+ALTER TABLE exposure_findings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY owner_isolation ON exposure_findings FOR SELECT
+USING (
+    org_id = current_setting('app.current_org_id')
+    AND (business_unit = current_setting('app.current_bu')
+         OR current_setting('app.current_role') = 'ADMIN')
+);
+```
+
+### API Context Injection
+
+```python
+SET app.current_org_id = 'org001';
+SET app.current_bu = 'Finance-Team';
+SET app.current_role = 'ANALYST';
+# All queries auto-filter to user scope via RLS
+```
+
+## 10.6 Cloudera Ranger (Coarse Tenant Isolation)
+
+```
+Ranger: org001_analysts SELECT WHERE org_id='org001'
+Ranger: org002_analysts SELECT WHERE org_id='org002'
+```
+Coarse (tenant). Fine granularity (BU, owner) enforced in PostgreSQL RLS.
+
+## 10.7 Ownership Control Table (Phase 2+)
+
+```sql
+CREATE TABLE t01_ueh_dev_ctl.t01_ueh_ctl_ownership_rules (
+    rule_id         STRING,
+    org_id          STRING,
+    match_type      STRING,   -- HOSTNAME_PATTERN | IP_RANGE | BU | TAG
+    match_value     STRING,   -- "fin-*" or "10.5.0.0/16"
+    assigned_owner  STRING,   -- Finance-Team
+    assigned_bu     STRING,
+    priority        INT,
+    is_active       BOOLEAN,
+    created_at      TIMESTAMP
+) USING iceberg;
+```
+
+Stage 2 reads rules to assign ownership when source lacks it:
+```
+hostname 'fin-web-01' matches 'fin-*' → owner='Finance-Team'
+```
+
+## 10.8 Ownership Evolution Roadmap
+
+| Phase | Capability |
+|-------|-----------|
+| 1 (MVP) | org_id everywhere + owner from ADDM support_group |
+| 2 | ownership_rules table + CMDB authoritative owner |
+| 3 | PostgreSQL RLS + Ranger tenant policies |
+| 4 | Identity-based (slv_identity from IAM groups) |
+
+## 10.9 Ownership DQ Check
+
+```sql
+SELECT org_id, COUNT(*) total,
+    SUM(CASE WHEN owner='UNASSIGNED' THEN 1 ELSE 0 END) unowned,
+    ROUND(1 - SUM(CASE WHEN owner='UNASSIGNED' THEN 1 ELSE 0 END)/COUNT(*),3) coverage
+FROM slv_asset GROUP BY org_id;
+-- Target: coverage > 0.95. Unowned assets = security blind spot.
+```
