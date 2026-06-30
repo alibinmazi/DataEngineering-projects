@@ -1,0 +1,180 @@
+# =============================================================================
+# UEH Canonical Schema: Asset
+# =============================================================================
+# Target Silver table: t01_ueh_slv_assets
+# All asset sources (BMC ADDM, CMDB, Tenable-discovered) map INTO this schema.
+# Analysts map source fields → these canonical fields via UEH Dashboard.
+#
+# Design: Single table for ALL asset types.
+#   - Common fields → typed columns (queryable)
+#   - Category-specific fields → asset_attributes_json (flexible)
+# =============================================================================
+
+schema_name: asset
+schema_version: 1
+description: "Canonical asset inventory schema for Silver layer. Covers all asset types."
+target_table: t01_ueh_slv_assets
+
+# ─── Asset Types Supported ────────────────────────────────────────────────────
+asset_types:
+  - COMPUTE          # Physical/virtual servers, workstations, laptops
+  - CONTAINER        # Docker containers, K8s pods
+  - NETWORK          # Routers, switches, firewalls, load balancers
+  - DATABASE         # Database instances (PostgreSQL, Oracle, MSSQL)
+  - APPLICATION      # Software applications, services
+  - CLOUD_VM         # Cloud VMs (EC2, Azure VM, GCP Compute)
+  - STORAGE          # SAN, NAS, object storage
+  - OTHER            # Anything not categorized above
+
+# ─── Fields ───────────────────────────────────────────────────────────────────
+fields:
+
+  # ─── Identity ──────────────────────────────────────────────────────
+  - field: asset_id
+    type: STRING
+    required: true
+    description: "UEH-generated universal asset ID (hash of source_system + source_asset_id)"
+    generated: true
+
+  - field: source_asset_id
+    type: STRING
+    required: false
+    description: "Original asset ID from source system"
+
+  - field: source_system
+    type: STRING
+    required: true
+    description: "Which system reported this asset: BMC_ADDM, CMDB, TENABLE"
+
+  # ─── Classification ────────────────────────────────────────────────
+  - field: asset_type
+    type: STRING
+    required: false
+    description: "Asset category"
+    valid_values: [COMPUTE, CONTAINER, NETWORK, DATABASE, APPLICATION, CLOUD_VM, STORAGE, OTHER]
+
+  - field: asset_subtype
+    type: STRING
+    required: false
+    description: "Specific type within category"
+    examples: [PHYSICAL_SERVER, VIRTUAL_SERVER, LAPTOP, ROUTER, SWITCH, K8S_POD, RDS_INSTANCE]
+
+  # ─── Network Identity ──────────────────────────────────────────────
+  - field: ip_address
+    type: STRING
+    required: false
+    description: "Primary IP address"
+
+  - field: ip_addresses_json
+    type: STRING
+    required: false
+    description: "All known IPs as JSON array"
+
+  - field: hostname
+    type: STRING
+    required: false
+    description: "Primary hostname"
+
+  - field: fqdn
+    type: STRING
+    required: false
+    description: "Fully qualified domain name"
+
+  - field: mac_address
+    type: STRING
+    required: false
+    description: "Primary MAC address"
+
+  # ─── System Details ────────────────────────────────────────────────
+  - field: operating_system
+    type: STRING
+    required: false
+    description: "OS name and version string"
+
+  - field: os_family
+    type: STRING
+    required: false
+    description: "Normalized OS family"
+    valid_values: [WINDOWS, LINUX, MACOS, NETWORK_OS, CONTAINER_OS, OTHER]
+
+  # ─── Business Context ──────────────────────────────────────────────
+  - field: business_unit
+    type: STRING
+    required: false
+    description: "Owning business unit"
+
+  - field: environment
+    type: STRING
+    required: false
+    description: "Deployment environment"
+    valid_values: [PRODUCTION, STAGING, DEVELOPMENT, DMZ, DR]
+
+  - field: location
+    type: STRING
+    required: false
+    description: "Physical or logical location"
+
+  - field: region
+    type: STRING
+    required: false
+    description: "Geographic region"
+
+  - field: criticality
+    type: STRING
+    required: false
+    description: "Business criticality"
+    valid_values: [CRITICAL, HIGH, MEDIUM, LOW]
+
+  - field: owner
+    type: STRING
+    required: false
+    description: "Asset owner (team or individual)"
+
+  - field: application_name
+    type: STRING
+    required: false
+    description: "Application this asset belongs to"
+
+  # ─── Category-Specific Attributes ──────────────────────────────────
+  - field: asset_attributes_json
+    type: STRING
+    required: false
+    description: "Type-specific details as JSON. Schema varies by asset_type."
+    examples:
+      COMPUTE: '{"cpu_cores":8,"ram_gb":32,"disk_gb":500,"hypervisor":"VMware"}'
+      CONTAINER: '{"image":"nginx:1.25","namespace":"prod","pod":"web-abc","cluster":"k8s-prod"}'
+      NETWORK: '{"device_type":"switch","vendor":"Cisco","model":"Catalyst 9300","firmware":"17.6"}'
+      DATABASE: '{"db_engine":"PostgreSQL","version":"15.3","port":5432,"instance":"prod-db-01"}'
+      APPLICATION: '{"app_name":"SAP ERP","version":"S/4HANA 2023","vendor":"SAP"}'
+
+  # ─── Lifecycle ─────────────────────────────────────────────────────
+  - field: first_seen
+    type: TIMESTAMP
+    required: false
+    description: "When first discovered by any source"
+
+  - field: last_seen
+    type: TIMESTAMP
+    required: false
+    description: "When last confirmed active"
+
+  - field: is_active
+    type: BOOLEAN
+    required: false
+    description: "Whether currently active/reachable"
+
+  # ─── UEH Metadata ─────────────────────────────────────────────────
+  - field: adapter_instance_id
+    type: STRING
+    required: true
+    description: "Which adapter instance produced this"
+
+  - field: batch_id
+    type: STRING
+    required: true
+    description: "Batch that brought this record"
+
+  - field: ingestion_date
+    type: DATE
+    required: true
+    description: "When ingested into UEH"

@@ -1,0 +1,159 @@
+# =============================================================================
+# UEH Source Definition: Tenable (Vulnerability Scanner)
+# =============================================================================
+# Category: scanner
+# Silver target: slv_vulnerability_findings
+# API: https://cloud.tenable.com/vulns/export
+# Complexity: HIGH (export-based, async, multi-instance)
+# =============================================================================
+
+source_system: TENABLE
+display_name: "Tenable.io Vulnerability Scanner"
+category: scanner
+description: "Enterprise vulnerability scanner. Exports vulnerability findings per asset."
+documentation_url: "https://developer.tenable.com/reference/exports-vulns-request-export"
+
+api:
+  base_url: "https://cloud.tenable.com"
+  endpoints:
+    export_request: "/vulns/export"
+    export_status: "/vulns/export/{export_uuid}/status"
+    export_download: "/vulns/export/{export_uuid}/chunks/{chunk_id}"
+  method: POST
+  auth_methods_supported:
+    - API_KEY
+
+pagination:
+  type: export_job
+  description: "Async export: POST request → poll status → download chunks"
+  chunk_based: true
+
+incremental:
+  supported: true
+  watermark_type: unix_timestamp
+  watermark_params:
+    filter_field: "last_found"
+  description: "Filter by last_found timestamp for incremental exports"
+
+response:
+  array_field: null
+  description: "Each chunk IS an array of vulnerability objects (no wrapper)"
+  record_id_path: "$.plugin.id"
+  record_id_format: "numeric plugin_id"
+  secondary_id_path: "$.asset.uuid"
+
+# Silver routing
+silver:
+  target_schema: vulnerability_finding
+  write_strategy: APPEND
+  requires_asset_correlation: true
+
+# Default field mappings (analyst will confirm/modify via UI)
+default_mappings:
+  - source_path: "$.plugin.id"
+    target_field: source_finding_id
+    target_schema: vulnerability_finding
+    transformation: CAST
+    config: { cast_to: STRING }
+
+  - source_path: "$.plugin.cve[0]"
+    target_field: cve_id
+    target_schema: vulnerability_finding
+    transformation: DIRECT
+
+  - source_path: "$.plugin.name"
+    target_field: vulnerability_name
+    target_schema: vulnerability_finding
+    transformation: DIRECT
+
+  - source_path: "$.asset.uuid"
+    target_field: source_asset_id
+    target_schema: vulnerability_finding
+    transformation: DIRECT
+
+  - source_path: "$.asset.ipv4"
+    target_field: asset_ip
+    target_schema: vulnerability_finding
+    transformation: DIRECT
+
+  - source_path: "$.asset.hostname"
+    target_field: asset_hostname
+    target_schema: vulnerability_finding
+    transformation: DIRECT
+
+  - source_path: "$.asset.fqdn"
+    target_field: asset_fqdn
+    target_schema: vulnerability_finding
+    transformation: DIRECT
+
+  - source_path: "$.asset.operating_system[0]"
+    target_field: asset_os
+    target_schema: vulnerability_finding
+    transformation: DIRECT
+
+  - source_path: "$.severity"
+    target_field: severity
+    target_schema: vulnerability_finding
+    transformation: LOOKUP
+    config:
+      map:
+        "0": "INFORMATIONAL"
+        "1": "LOW"
+        "2": "MEDIUM"
+        "3": "HIGH"
+        "4": "CRITICAL"
+
+  - source_path: "$.plugin.cvss_base_score"
+    target_field: cvss_base_score
+    target_schema: vulnerability_finding
+    transformation: CAST
+    config: { cast_to: DOUBLE }
+
+  - source_path: "$.plugin.vpr.score"
+    target_field: source_risk_score
+    target_schema: vulnerability_finding
+    transformation: CAST
+    config: { cast_to: DOUBLE }
+
+  - source_path: "$.state"
+    target_field: status
+    target_schema: vulnerability_finding
+    transformation: LOOKUP
+    config:
+      map:
+        "open": "OPEN"
+        "reopened": "REOPENED"
+        "fixed": "FIXED"
+
+  - source_path: "$.first_found"
+    target_field: first_seen
+    target_schema: vulnerability_finding
+    transformation: CAST
+    config: { cast_to: TIMESTAMP }
+
+  - source_path: "$.last_found"
+    target_field: last_seen
+    target_schema: vulnerability_finding
+    transformation: CAST
+    config: { cast_to: TIMESTAMP }
+
+  - source_path: "$.output"
+    target_field: output
+    target_schema: vulnerability_finding
+    transformation: DIRECT
+
+  - source_path: "$.plugin.solution"
+    target_field: solution
+    target_schema: vulnerability_finding
+    transformation: DIRECT
+
+  - source_path: "$.port.port"
+    target_field: port
+    target_schema: vulnerability_finding
+    transformation: CAST
+    config: { cast_to: INT }
+
+  - source_path: "$.port.protocol"
+    target_field: protocol
+    target_schema: vulnerability_finding
+    transformation: UPPER

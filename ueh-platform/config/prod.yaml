@@ -1,0 +1,90 @@
+# =============================================================================
+# UEH Platform: Prod Environment Configuration
+# =============================================================================
+# PRODUCTION — stricter settings, higher resources, tighter SLAs
+# =============================================================================
+
+environment: prod
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HDFS Paths
+# ─────────────────────────────────────────────────────────────────────────────
+hdfs:
+  base_path: /data-lake/prod/bronze
+  warehouse_path: /warehouse/prod
+  dead_letter_base: /data-lake/prod/bronze
+  spark_jobs: /apps/ueh/spark
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Iceberg Databases
+# ─────────────────────────────────────────────────────────────────────────────
+databases:
+  control: ueh_prod_control
+  bronze: ueh_prod_bronze
+  silver: ueh_prod_silver
+  gold: ueh_prod_gold
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NiFi Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+nifi:
+  base_url: https://nifi-prod.internal:8443
+  process_groups:
+    nvd: "<nvd-process-group-id-prod>"
+    epss: "<epss-process-group-id-prod>"
+    cisa_kev: "<cisa-kev-process-group-id-prod>"
+  auth:
+    username: ueh_nifi_svc_prod
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hive / JDBC
+# ─────────────────────────────────────────────────────────────────────────────
+hive:
+  jdbc_url: jdbc:hive2://hiveserver-prod.internal:10000/default
+  driver: org.apache.hive.jdbc.HiveDriver
+  auth_mechanism: KERBEROS
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Spark Configuration (Production — higher resources)
+# ─────────────────────────────────────────────────────────────────────────────
+spark:
+  master: yarn
+  deploy_mode: cluster
+  conf:
+    driver_memory: 8g
+    executor_memory: 16g
+    executor_cores: 4
+    executor_instances: 4
+    dynamic_allocation_enabled: true
+    dynamic_allocation_min: 2
+    dynamic_allocation_max: 10
+    sql_extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+    sql_catalog: org.apache.iceberg.spark.SparkSessionCatalog
+    sql_catalog_type: hive
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Airflow Variables
+# ─────────────────────────────────────────────────────────────────────────────
+airflow:
+  variables:
+    ueh_environment: prod
+    ueh_nifi_base_url: https://nifi-prod.internal:8443
+    ueh_nifi_pg_nvd: "<process-group-id-prod>"
+    ueh_nifi_username: ueh_nifi_svc_prod
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Vault / Secrets
+# ─────────────────────────────────────────────────────────────────────────────
+vault:
+  address: https://vault-prod.internal:8200
+  auth_method: approle
+  secret_base_path: secrets/ueh/prod
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Monitoring & Alerting (Production — tighter)
+# ─────────────────────────────────────────────────────────────────────────────
+monitoring:
+  alert_email: ueh-prod-alerts@company.com
+  sla_breach_channel: "#ueh-prod-critical"
+  pagerduty_integration: true
+  dashboard_url: https://grafana-prod.internal:3000/d/ueh

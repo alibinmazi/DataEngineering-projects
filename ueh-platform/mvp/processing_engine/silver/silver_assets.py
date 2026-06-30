@@ -1,0 +1,198 @@
+"""
+=============================================================================
+UEH Silver: Asset Inventory
+=============================================================================
+Target table: t01_ueh_slv_assets
+Sources: BMC_ADDM, CMDB, scanner-discovered assets
+Write strategy: MERGE on asset_id (latest state wins)
+
+Unique logic:
+    - asset_id generation: md5(source_system + source_asset_id)
+    - asset_type classification from source data
+    - Lifecycle tracking (first_seen, last_seen, is_active)
+
+Usage:
+    spark-submit --conf ueh.environment=dev \
+        --py-files shared.zip \
+        silver_assets.py --batch_id <batch_id>
+=============================================================================
+"""
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import (
+    col, lit, current_timestamp, md5, concat_ws, coalesce
+)
+import argparse
+import logging
+import traceback
+import sys
+
+sys.path.insert(0, '/apps/ueh/spark/')
+
+
+from shared.mapping_engine import read_field_mappings, apply_mappings
+from shared.cleaning_engine import clean_data
+from shared.dq_engine import add_dq_flags_assets
+
+logging.basicConfig(level=logging.INFO, format='[UEH-Silver-Assets] %(levelname)s: %(message)s')
+logger = logging.getLogger("UEH-Silver-Assets")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="UEH Silver: Asset Inventory")
+    parser.add_argument("--batch_id", required=True)
+    args = parser.parse_args()
+    batch_id = args.batch_id
+
+    spark = SparkSession.builder \
+        .appName(f"UEH_Silver_Assets_{batch_id}") \
+        .config("spark.sql.extensions",
+                "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
+        .config("spark.sql.catalog.spark_catalog",
+                "org.apache.iceberg.spark.SparkSessionCatalog") \
+        .config("spark.sql.catalog.spark_catalog.type", "hive") \
+        .getOrCreate()
+
+    env = spark.conf.get("ueh.environment", "dev")
+    db_control = f"t01_ueh_{env}_ctl"
+    db_bronze = f"t01_ueh_{env}_brz"
+    db_silver = f"t01_ueh_{env}_slv"
+    silver_table = f"{db_silver}.t01_ueh_slv_assets"
+
+    logger.info("=" * 60)
+    logger.info(f"Silver Assets: batch={batch_id}")
+    logger.info("=" * 60)
+
+
+    try:
+        # 1. Read batch context
+        batch = spark.sql(f"""
+            SELECT b.batch_id, b.adapter_instance_id, b.batch_status,
+                   b.ingestion_date, a.source_system, a.org_id
+            FROM {db_control}.t01_ueh_ctl_batch_registry b
+            JOIN {db_control}.t01_ueh_ctl_adapter_config a
+              ON b.adapter_instance_id = a.adapter_instance_id
+            WHERE b.batch_id = '{batch_id}'
+        """).first()
+
+        if batch is None:
+            raise Exception(f"Batch '{batch_id}' not found!")
+        if batch.batch_status != 'BRONZE_COMPLETE':
+            raise Exception(f"Status is '{batch.batch_status}', expected BRONZE_COMPLETE")
+
+        source_system = batch.source_system
+        org_id = batch.org_id
+        adapter_instance_id = batch.adapter_instance_id
+        ingestion_date = str(batch.ingestion_date)
+        bronze_table = f"{db_bronze}.t01_ueh_brz_{source_system.lower()}_raw"
+
+        logger.info(f"Source: {source_system}, Bronze: {bronze_table}")
+
+        # 2. Read field mappings
+        mappings = read_field_mappings(spark, db_control, source_system, org_id)
+        mapped_fields = [m.target_field for m in mappings]
+
+        # 3. Read Bronze records
+        bronze_df = spark.sql(f"""
+            SELECT batch_id, adapter_instance_id, ingestion_ts,
+                   payload_json, source_record_id
+            FROM {bronze_table}
+            WHERE batch_id = '{batch_id}'
+        """)
+
+        bronze_count = bronze_df.count()
+        logger.info(f"Bronze records: {bronze_count}")
+
+        if bronze_count == 0:
+            _update_status(spark, db_control, batch_id, 'SILVER_COMPLETE', 0)
+            return
+
+
+        # 4. Apply field mappings
+        silver_df = apply_mappings(bronze_df, mappings)
+
+        # 5. Generate asset_id + metadata
+        silver_df = silver_df \
+            .withColumn("source_system", lit(source_system)) \
+            .withColumn("asset_id",
+                        md5(concat_ws("||",
+                                      lit(source_system),
+                                      coalesce(col("source_asset_id"), lit("unknown"))
+                                      ))) \
+            .withColumn("adapter_instance_id", lit(adapter_instance_id)) \
+            .withColumn("batch_id", lit(batch_id)) \
+            .withColumn("ingestion_date", lit(ingestion_date).cast("date")) \
+            .withColumn("source_systems_json", lit(f'["{source_system}"]')) \
+            .withColumn("last_source_batch_id", lit(batch_id)) \
+            .withColumn("is_active", lit(True)) \
+            .withColumn("last_seen", current_timestamp())
+
+        # 6. Clean
+        silver_df = clean_data(silver_df, mapped_fields)
+
+        # 7. DQ flags
+        silver_df = add_dq_flags_assets(silver_df)
+
+        # 8. Select target columns
+        target_cols = _get_target_columns(silver_df, silver_table, spark)
+        silver_df = silver_df.select(*[col(c) for c in target_cols if c in silver_df.columns])
+
+        # 9. MERGE on asset_id
+        record_count = silver_df.count()
+        logger.info(f"Writing {record_count} records (MERGE on asset_id)")
+
+        silver_df.createOrReplaceTempView("silver_assets_batch")
+
+        columns = [c for c in silver_df.columns if c != 'asset_id']
+        set_clause = ", ".join([f"target.{c} = source.{c}" for c in columns])
+        insert_cols = ", ".join(silver_df.columns)
+        insert_vals = ", ".join([f"source.{c}" for c in silver_df.columns])
+
+        spark.sql(f"""
+            MERGE INTO {silver_table} AS target
+            USING silver_assets_batch AS source
+            ON target.asset_id = source.asset_id
+            WHEN MATCHED THEN UPDATE SET {set_clause}
+            WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})
+        """)
+
+        # 10. Update status
+        _update_status(spark, db_control, batch_id, 'SILVER_COMPLETE', record_count)
+        logger.info(f"SUCCESS: {record_count} records → SILVER_COMPLETE")
+
+    except Exception as e:
+        logger.error(f"FAILED: {e}")
+        traceback.print_exc()
+        try:
+            _update_status(spark, db_control, batch_id, 'FAILED', 0, str(e))
+        except:
+            pass
+        raise
+    finally:
+        spark.stop()
+
+
+
+def _get_target_columns(df, table_name, spark):
+    try:
+        table_cols = [row.col_name for row in spark.sql(f"DESCRIBE {table_name}").collect()
+                      if not row.col_name.startswith('#')]
+        return [c for c in table_cols if c in df.columns]
+    except:
+        return df.columns
+
+
+def _update_status(spark, db_control, batch_id, status, records, error=None):
+    sets = [f"batch_status = '{status}'", f"records_processed = {records}",
+            "end_time = current_timestamp()"]
+    if error:
+        safe = str(error).replace("'", "''")[:500]
+        sets.append(f"failure_reason = '{safe}'")
+    spark.sql(f"""
+        UPDATE {db_control}.t01_ueh_ctl_batch_registry
+        SET {', '.join(sets)} WHERE batch_id = '{batch_id}'
+    """)
+
+
+if __name__ == "__main__":
+    main()
