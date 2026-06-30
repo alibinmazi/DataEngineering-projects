@@ -124,42 +124,83 @@ def main():
         else:
             raise Exception(f"No Stage 2 canonical logic for source_system='{source_system}'")
 
-        # ─── 3. Filter NULL keys ─────────────────────────────────────
-        canonical_df = canonical_df.filter("cve_id IS NOT NULL")
+        # ─── 3. Filter NULL keys (FIX: nullable values to non-null column) ─
+        # Iceberg rejects NULL in NOT NULL columns at write time.
+        # Filter out any records where primary key is NULL.
+        canonical_df = canonical_df.filter(col("cve_id").isNotNull())
+        canonical_df = canonical_df.filter(col("ingestion_date").isNotNull())
+        logger.info(f"Records after NULL key filter: {canonical_df.count()}")
 
-        # ─── 4. Align to target schema ───────────────────────────────
-        target_cols = [f.name for f in spark.table(canonical_table).schema.fields]
-        for c in target_cols:
-            if c not in canonical_df.columns:
-                canonical_df = canonical_df.withColumn(c, lit(None).cast(StringType()))
+        # ─── 4. Align to target schema (FIX: missing columns error) ───
+        # Iceberg MERGE INSERT requires ALL target columns.
+        # Use spark.table().schema (NOT DESCRIBE — avoids 'Part 0' issue).
+        target_schema = spark.table(canonical_table).schema
+        target_cols = [field.name for field in target_schema.fields]
+        
+        logger.info(f"Target table has {len(target_cols)} columns")
+        logger.info(f"DataFrame has {len(canonical_df.columns)} columns")
+        
+        # Add any missing columns as NULL (cast to StringType as safe default)
+        missing_cols = [c for c in target_cols if c not in canonical_df.columns]
+        if missing_cols:
+            logger.info(f"Adding {len(missing_cols)} missing columns as NULL: {missing_cols}")
+        for c in missing_cols:
+            canonical_df = canonical_df.withColumn(c, lit(None).cast(StringType()))
+        
+        # Select ONLY target columns in correct order (drops extras)
         canonical_df = canonical_df.select(*[col(c) for c in target_cols])
 
-        # ─── 5. Cast to match target types ───────────────────────────
-        target_schema = spark.table(canonical_table).schema
+        # ─── 5. Cast to match target types (FIX: string to double error) ─
+        # get_json_object() ALWAYS returns StringType.
+        # Iceberg enforces strict schema at write time.
+        # Explicitly cast EVERY column to match target table datatype.
         for field in target_schema.fields:
             if field.name in canonical_df.columns:
                 canonical_df = canonical_df.withColumn(
                     field.name, col(field.name).cast(field.dataType))
+        
+        logger.info("Schema alignment complete. All columns cast to target types.")
+
+        # ─── 5.5 Final NULL safety for NOT NULL columns ──────────────
+        # After casting, some values may become NULL (e.g., invalid string → NULL double)
+        # Re-filter to ensure NOT NULL constraints are satisfied.
+        # Only filter on columns that are NOT nullable in target schema.
+        not_null_cols = [f.name for f in target_schema.fields if not f.nullable]
+        if not_null_cols:
+            filter_expr = " AND ".join([f"{c} IS NOT NULL" for c in not_null_cols])
+            before_count = canonical_df.count()
+            canonical_df = canonical_df.filter(filter_expr)
+            after_count = canonical_df.count()
+            if before_count != after_count:
+                logger.warning(
+                    f"Filtered {before_count - after_count} records with NULL in NOT NULL columns: {not_null_cols}")
 
         # ─── 6. MERGE into Canonical Table ────────────────────────────
         record_count = canonical_df.count()
         logger.info(f"Merging {record_count} records into {canonical_table}")
 
-        canonical_df.createOrReplaceTempView("canonical_batch")
+        if record_count == 0:
+            logger.warning("No records to merge after filtering. Skipping MERGE.")
+        else:
+            canonical_df.createOrReplaceTempView("canonical_batch")
 
-        all_cols = canonical_df.columns
-        non_key = [c for c in all_cols if c != 'cve_id']
-        set_clause = ", ".join([f"target.{c} = source.{c}" for c in non_key])
-        insert_cols = ", ".join(all_cols)
-        insert_vals = ", ".join([f"source.{c}" for c in all_cols])
+            all_cols = canonical_df.columns
+            non_key = [c for c in all_cols if c != 'cve_id']
+            set_clause = ", ".join([f"target.{c} = source.{c}" for c in non_key])
+            insert_cols = ", ".join(all_cols)
+            insert_vals = ", ".join([f"source.{c}" for c in all_cols])
 
-        spark.sql(f"""
-            MERGE INTO {canonical_table} AS target
-            USING canonical_batch AS source
-            ON target.cve_id = source.cve_id
-            WHEN MATCHED THEN UPDATE SET {set_clause}
-            WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})
-        """)
+            merge_sql = f"""
+                MERGE INTO {canonical_table} AS target
+                USING canonical_batch AS source
+                ON target.cve_id = source.cve_id
+                WHEN MATCHED THEN UPDATE SET {set_clause}
+                WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})
+            """
+            
+            logger.info("Executing MERGE...")
+            spark.sql(merge_sql)
+            logger.info("MERGE complete.")
 
         # ─── 7. Update batch_registry → SILVER_COMPLETE ──────────────
         spark.sql(f"""

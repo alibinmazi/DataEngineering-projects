@@ -100,19 +100,22 @@ def parse(bronze_df: DataFrame, batch_id: str,
     )
 
     # ─── DQ Flags ─────────────────────────────────────────────────────
+    # Cast DQ columns explicitly to BooleanType to avoid type inference issues
     parsed_df = parsed_df \
         .withColumn("dq_has_cve_id",
-                    col("cve_id").isNotNull()) \
+                    col("cve_id").isNotNull().cast(BooleanType())) \
         .withColumn("dq_has_cvss",
-                    col("cvss31_base_score").isNotNull() | col("cvss2_base_score").isNotNull()) \
+                    (col("cvss31_base_score").isNotNull() | col("cvss2_base_score").isNotNull()).cast(BooleanType())) \
         .withColumn("dq_has_description",
-                    col("description_en").isNotNull() & (length(col("description_en")) > 0)) \
+                    (col("description_en").isNotNull() & (length(col("description_en")) > 0)).cast(BooleanType())) \
         .withColumn("dq_cve_format_valid",
-                    col("cve_id").rlike("^CVE-[0-9]{4}-[0-9]{4,}$")) \
+                    when(col("cve_id").isNotNull(),
+                         col("cve_id").rlike("^CVE-[0-9]{4}-[0-9]{4,}$"))
+                    .otherwise(lit(False)).cast(BooleanType())) \
         .withColumn("dq_cvss_in_range",
                     when(col("cvss31_base_score").isNotNull(),
                          (col("cvss31_base_score") >= 0) & (col("cvss31_base_score") <= 10))
-                    .otherwise(lit(True)))
+                    .otherwise(lit(True)).cast(BooleanType()))
 
     # ─── Processing Metadata ──────────────────────────────────────────
     parsed_df = parsed_df \

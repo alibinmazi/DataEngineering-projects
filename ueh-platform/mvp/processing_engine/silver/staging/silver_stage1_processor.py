@@ -147,6 +147,46 @@ def main():
         """)
         logger.info(f"Idempotency: cleared previous staging for batch {batch_id}")
 
+        # ─── 6.5 Align DataFrame to staging table schema ─────────────
+        # FIX: Prevents 'missing column' and 'type mismatch' errors.
+        # Uses spark.table().schema (NOT DESCRIBE — avoids 'Part 0').
+        try:
+            target_schema = spark.table(staging_table).schema
+            target_cols = [field.name for field in target_schema.fields]
+            
+            # Add missing columns as NULL
+            for c in target_cols:
+                if c not in staged_df.columns:
+                    from pyspark.sql.types import StringType
+                    staged_df = staged_df.withColumn(c, lit(None).cast(StringType()))
+            
+            # Drop extra columns not in target
+            extra_cols = [c for c in staged_df.columns if c not in target_cols]
+            if extra_cols:
+                logger.info(f"Dropping {len(extra_cols)} extra columns: {extra_cols}")
+                staged_df = staged_df.drop(*extra_cols)
+            
+            # Reorder to match target
+            staged_df = staged_df.select(*[col(c) for c in target_cols if c in staged_df.columns])
+            
+            # Cast ALL columns to match target types (FIX: string→double, string→boolean, etc.)
+            for field in target_schema.fields:
+                if field.name in staged_df.columns:
+                    staged_df = staged_df.withColumn(
+                        field.name, col(field.name).cast(field.dataType))
+            
+            # Filter NOT NULL columns (FIX: nullable values error)
+            not_null_cols = [f.name for f in target_schema.fields if not f.nullable]
+            if not_null_cols:
+                existing_not_null = [c for c in not_null_cols if c in staged_df.columns]
+                if existing_not_null:
+                    filter_expr = " AND ".join([f"{c} IS NOT NULL" for c in existing_not_null])
+                    staged_df = staged_df.filter(filter_expr)
+            
+            logger.info(f"Schema aligned to {staging_table} ({len(target_cols)} columns)")
+        except Exception as schema_err:
+            logger.warning(f"Schema alignment skipped (table may not exist yet): {schema_err}")
+
         # ─── 7. Write to Staging Table ───────────────────────────────
         record_count = staged_df.count()
         logger.info(f"Writing {record_count} staged records to {staging_table}")
